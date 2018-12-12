@@ -17,10 +17,11 @@ import hashlib
 VIEW_SET_INTERVAL = 10
 
 class View:
-    def __init__(self, view_number, num_nodes):
+    def __init__(self, view_number, num_nodes, trusted_nodes):
         self._view_number = view_number
         self._num_nodes = num_nodes
         self._leader = view_number % num_nodes
+        self._leader_trusted = self._leader in trusted_nodes
         # Minimum interval to set the view number
         self._min_set_interval = VIEW_SET_INTERVAL
         self._last_set_time = time.time()
@@ -40,6 +41,7 @@ class View:
         self._last_set_time = time.time()
         self._view_number = view
         self._leader = view % self._num_nodes
+        self._leader_trusted = self._leader in conf['trusted_nodes']
         return True
 
     def get_leader(self):
@@ -262,9 +264,11 @@ class CheckPoint:
             command: action
             json_data: Data in json format.
         '''
+        
         if not self._session:
             timeout = aiohttp.ClientTimeout(self._network_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
+        #await asyncio.sleep(0.05)
         for i, node in enumerate(nodes):
             if random() > self._loss_rate:
                 self._log.debug("make request to %d, %s", i, command)
@@ -396,14 +400,14 @@ class ViewChangeVotes:
                 }
         '''
         update_view = None
-
+        
         prepare_certificates = json_data["prepare_certificates"]
 
         self._log.debug("%d update prepare_certificate for view %d", 
             self._node_index, json_data['view_number'])
 
         for slot in prepare_certificates:
-            prepare_certificate = Status.Certificate(View(0, self._num_total_nodes))
+            prepare_certificate = Status.Certificate(View(0, self._num_total_nodes, self._trusted_nodes))
             prepare_certificate.dumps_from_dict(prepare_certificates[slot])
             # Keep the prepare certificate who has the largest view number
             if slot not in self.prepare_certificate_by_slot or (
@@ -431,13 +435,14 @@ class PBFTHandler:
 
     def __init__(self, index, conf):
         self._nodes = conf['nodes']
+        self._trusted_nodes = conf['trusted_nodes']
         self._node_cnt = len(self._nodes)
         self._index = index
         # Number of faults tolerant.
         self._f = (self._node_cnt - 1) // 3
 
         # leader
-        self._view = View(0, self._node_cnt)
+        self._view = View(0, self._node_cnt, self._trusted_nodes)
         self._next_propose_slot = 0
 
         # TODO: Test fixed
@@ -467,7 +472,7 @@ class PBFTHandler:
         self._leader = 0
 
         # The largest view either promised or accepted
-        self._follow_view = View(0, self._node_cnt)
+        self._follow_view = View(0, self._node_cnt, self._trusted_nodes)
         # Restore the votes number and information for each view number
         self._view_change_votes_by_view_number = {}
         
@@ -539,9 +544,11 @@ class PBFTHandler:
             command: action
             json_data: Data in json format.
         '''
+        #
         if not self._session:
             timeout = aiohttp.ClientTimeout(self._network_timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
+        #await asyncio.sleep(0.05)
         for i, node in enumerate(nodes):
             if random() > self._loss_rate:
                 self._log.debug("make request to %d, %s", i, command)
@@ -702,24 +709,64 @@ class PBFTHandler:
                 self._status_by_slot[slot] = Status(self._f)
             status = self._status_by_slot[slot]
 
-            view = View(json_data['view'], self._node_cnt)
+            view = View(json_data['view'], self._node_cnt, self._trusted_nodes)
 
             status._update_sequence(json_data['type'], 
                 view, json_data['proposal'][slot], json_data['index'])
 
             if status._check_majority(json_data['type']):
-                status.prepare_certificate = Status.Certificate(view, 
-                    json_data['proposal'][slot])
-                commit_msg = {
-                    'index': self._index,
-                    'view': json_data['view'],
-                    'proposal': {
-                        slot: json_data['proposal'][slot]
-                    },
-                    'type': Status.COMMIT
-                }
-                await self._post(self._nodes, PBFTHandler.REPLY, commit_msg)
+                if self._leader in self._trusted_nodes:
+                    status.prepare_certificate = Status.Certificate(view, 
+                        json_data['proposal'][slot])
+                    status.commit_certificate = Status.Certificate(view, 
+                        json_data['proposal'][slot])
+
+                    if self._last_commit_slot == int(slot) - 1 and not status.is_committed:
+
+                        reply_msg = {
+                            'index': self._index,
+                            'view': json_data['view'],
+                            'proposal': json_data['proposal'][slot],
+                            'type': Status.REPLY
+                        }
+                        status.is_committed = True
+                        self._last_commit_slot += 1
+
+                        # When commit messages fill the next checkpoint, 
+                        # propose a new checkpoint.
+                        if (self._last_commit_slot + 1) % self._checkpoint_interval == 0:
+                            await self._ckpt.propose_vote(self.get_commit_decisions())
+                            self._log.info("---> %d: Propose checkpoint with last slot: %d. "
+                                "In addition, current checkpoint's next_slot is: %d", 
+                                self._index, self._last_commit_slot, self._ckpt.next_slot)
+
+
+                        # Commit!
+                        await self._commit_action()
+                        try:
+                            await self._session.post(
+                                json_data['proposal'][slot]['client_url'], json=reply_msg)
+                        except:
+                            self._log.error("Send message failed to %s", 
+                                json_data['proposal'][slot]['client_url'])
+                            pass
+                        else:
+                            self._log.info("%d reply to %s successfully!!", 
+                                self._index, json_data['proposal'][slot]['client_url'])
+                else:
+                    status.prepare_certificate = Status.Certificate(view, 
+                        json_data['proposal'][slot])
+                    commit_msg = {
+                        'index': self._index,
+                        'view': json_data['view'],
+                        'proposal': {
+                            slot: json_data['proposal'][slot]
+                        },
+                        'type': Status.COMMIT
+                    }
+                    await self._post(self._nodes, PBFTHandler.REPLY, commit_msg)
         return web.Response()
+
 
     async def reply(self, request):
         '''
@@ -757,19 +804,24 @@ class PBFTHandler:
                 self._status_by_slot[slot] = Status(self._f)
             status = self._status_by_slot[slot]
 
-            view = View(json_data['view'], self._node_cnt)
+            view = View(json_data['view'], self._node_cnt, self._trusted_nodes)
 
             status._update_sequence(json_data['type'], 
                 view, json_data['proposal'][slot], json_data['index'])
 
             # Commit only when no commit certificate and got more than 2f + 1
             # commit message.
+            # print(self._leader in self._trusted_nodes)
+            # if not status.commit_certificate and (status._check_majority(json_data['type'])
+            #     or self._leader in self._trusted_nodes
+            # ):
             if not status.commit_certificate and status._check_majority(json_data['type']):
                 status.commit_certificate = Status.Certificate(view, 
                     json_data['proposal'][slot])
-
-                self._log.debug("Add commit certifiacte to slot %d", int(slot))
-                
+                if self._leader in self._trusted_nodes:
+                    self._log.debug("Add commit certifiacte to slot %d for leader being trusted", int(slot))
+                else:
+                    self._log.debug("Add commit certifiacte to slot %d", int(slot))
                 # Reply only once and only when no bubble ahead
                 if self._last_commit_slot == int(slot) - 1 and not status.is_committed:
 
@@ -868,11 +920,11 @@ class PBFTHandler:
             certificate = json_data['commit_certificates'][slot]
             if slot not in self._status_by_slot:
                 self._status_by_slot[slot] = Status(self._f)
-                commit_certificate = Status.Certificate(View(0, self._node_cnt))
+                commit_certificate = Status.Certificate(View(0, self._node_cnt, self._trusted_nodes))
                 commit_certificate.dumps_from_dict(certificate)
                 self._status_by_slot[slot].commit_certificate =  commit_certificate
             elif not self._status_by_slot[slot].commit_certificate:
-                commit_certificate = Status.Certificate(View(0, self._node_cnt))
+                commit_certificate = Status.Certificate(View(0, self._node_cnt, self._trusted_nodes))
                 commit_certificate.dumps_from_dict(certificate)
                 self._status_by_slot[slot].commit_certificate =  commit_certificate
 
@@ -1054,7 +1106,9 @@ class PBFTHandler:
                 proposal_by_slot = {}
                 for i in range(self._ckpt.next_slot, last_certificate_slot + 1):
                     slot = str(i)
-                    if slot not in votes.prepare_certificate_by_slot:
+                    
+                    if (slot not in votes.prepare_certificate_by_slot or 
+                        not votes.prepare_certificate_by_slot[slot]._view._leader_trusted):
 
                         self._log.debug("%d decide no_op for slot %d", 
                             self._index, int(slot))

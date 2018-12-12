@@ -7,6 +7,103 @@ nodes:
       port: 30002
     - host: localhost
       port: 30003
+    - host: localhost
+      port: 30004
+    - host: localhost
+      port: 30005
+    - host: localhost
+      port: 30006
+    - host: localhost
+      port: 30007
+    - host: localhost
+      port: 30008
+    - host: localhost
+      port: 30009
+    - host: localhost
+      port: 30010
+    - host: localhost
+      port: 30011
+    - host: localhost
+      port: 30012
+    - host: localhost
+      port: 30013
+    - host: localhost
+      port: 30014
+    - host: localhost
+      port: 30015
+    - host: localhost
+      port: 30016
+    - host: localhost
+      port: 30017
+    - host: localhost
+      port: 30018
+    - host: localhost
+      port: 30019
+    - host: localhost
+      port: 30020
+    - host: localhost
+      port: 30021
+    - host: localhost
+      port: 30022
+    - host: localhost
+      port: 30023
+    - host: localhost
+      port: 30024
+    - host: localhost
+      port: 30025
+    - host: localhost
+      port: 30026
+    - host: localhost
+      port: 30027
+    - host: localhost
+      port: 30028
+    - host: localhost
+      port: 30029
+    # - host: localhost
+    #   port: 30030
+    # - host: localhost
+    #   port: 30031
+    # - host: localhost
+    #   port: 30032
+    # - host: localhost
+    #   port: 30033
+    # - host: localhost
+    #   port: 30034
+    # - host: localhost
+    #   port: 30035
+    # - host: localhost
+    #   port: 30036
+    # - host: localhost
+    #   port: 30037
+    # - host: localhost
+    #   port: 30038
+    # - host: localhost
+    #   port: 30039
+    # - host: localhost
+    #   port: 30040
+    # - host: localhost
+    #   port: 30041
+    # - host: localhost
+    #   port: 30042
+    # - host: localhost
+    #   port: 30043
+    # - host: localhost
+    #   port: 30044
+    # - host: localhost
+    #   port: 30045
+    # - host: localhost
+    #   port: 30046
+    # - host: localhost
+    #   port: 30047
+    # - host: localhost
+    #   port: 30048
+    # - host: localhost
+    #   port: 30049
+    # - host: localhost
+    #   port: 30050
+
+
+trusted_nodes: [0,1]
 
 clients:
     - host: localhost
@@ -23,4 +120,4 @@ retry_times_before_view_change: 2
 sync_interval: 5
 
 misc:
-    network_timeout: 5
+    network_timeout: 50
